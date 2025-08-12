@@ -3,3 +3,6 @@ dset/
 
 # Environment folder
 macm-env/
+
+# Log folder
+log/
