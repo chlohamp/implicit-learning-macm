@@ -1,8 +1,11 @@
 # Dataset folders
 dset/
+derivatives/
 
 # Environment folder
 macm-env/
 
 # Log folder
 log/
+
+roi_list.txt
