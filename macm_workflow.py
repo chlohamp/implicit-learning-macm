@@ -1,6 +1,4 @@
-"""Workflow for running roi-based meta-analysic connectivity modeling."""
-
-### needs to be optimized to run 3 rois all at once ###
+"""Workflow for running ROI-based meta-analytic connectivity modeling (MACM)."""
 
 import argparse
 import os
@@ -10,18 +8,13 @@ from glob import glob
 
 import nibabel as nib
 import numpy as np
-from nilearn.image import math_img
+from nilearn.image import threshold_img
 from nimare.dataset import Dataset
-from nimare.diagnostics import FocusCounter, Jackknife
-from nimare.io import convert_sleuth_to_dataset
-from nimare.meta import ALE
-from nimare.meta.cbma import ALESubtraction
 from nimare.reports.base import run_reports
 from nimare.results import MetaResult
 from nimare.transforms import p_to_z
-from nimare.workflows.cbma import CBMAWorkflow, PairwiseCBMAWorkflow
-from nilearn.image import threshold_img, index_img, resample_to_img
-
+from nimare.workflows.cbma import CBMAWorkflow
+from nimare.meta import ALE
 
 
 def _get_parser():
@@ -31,6 +24,12 @@ def _get_parser():
         dest="project_dir",
         required=True,
         help="Path to project directory",
+    )
+    parser.add_argument(
+        "--roi_dir",
+        dest="roi_dir",
+        required=True,
+        help="Path to directory containing ROI NIfTI files (.nii or .nii.gz)",
     )
     parser.add_argument(
         "--n_cores",
@@ -44,17 +43,38 @@ def _get_parser():
 
 ALE_PVAL = 0.01  # FWE-corrected threshold for diagnostics, one-tailed
 
-def main(project_dir, n_cores):
+
+def _is_binary(img: nib.Nifti1Image) -> bool:
+    data = np.asarray(img.dataobj)
+    uniq = np.unique(data[np.isfinite(data)])
+    return np.all(np.isin(uniq, [0, 1])) and uniq.size <= 2
+
+
+def _binarize(img: nib.Nifti1Image, z_thresh=2.33, clust_thresh=10) -> nib.Nifti1Image:
+    """
+    Make a binary mask. If already binary (0/1), return as-is.
+    Otherwise, apply |z| > z_thresh with cluster extent threshold, then binarize >0.
+    """
+    if _is_binary(img):
+        return img
+
+    thr = threshold_img(img, threshold=z_thresh, cluster_threshold=clust_thresh)
+    data = thr.get_fdata()
+    data = (data > 0).astype(np.int16)
+    return nib.Nifti1Image(data, thr.affine, thr.header)
+
+
+def main(project_dir, roi_dir, n_cores):
     n_cores = int(n_cores)
     project_dir = op.abspath(project_dir)
+    roi_dir = op.abspath(roi_dir)
+
     data_dir = op.join(project_dir, "data")
     results_dir = op.join(project_dir, "results")
     os.makedirs(results_dir, exist_ok=True)
+    os.makedirs(data_dir, exist_ok=True)
 
-    #this doesnt work on hpc
-    #have to download neurosynth on local and tranfer
-
-    # Load Neurosynth database
+    # Load (or fetch+convert) Neurosynth dataset
     neurosynth_dset_path = op.join(data_dir, "neurosynth_terms_dataset.pkl.gz")
     if not op.isfile(neurosynth_dset_path):
         from nimare.extract import fetch_neurosynth
@@ -77,62 +97,52 @@ def main(project_dir, n_cores):
     else:
         dset = Dataset.load(neurosynth_dset_path)
 
-    rois = ['OMNI']
-    z_thresh = 2.33
-    clust_thresh = 10
-    
-    for roi in rois:
-        nii_zmap = nib.load(op.join(data_dir, f'z_desc-mass_level-cluster_corr-FWE_method-montecarlo_{roi}.nii.gz'))
-        nii_zmap_thr = threshold_img(nii_zmap, z_thresh, cluster_threshold=clust_thresh)
+    # Collect ROI files
+    roi_files = sorted(
+        glob(op.join(roi_dir, "*.nii")) + glob(op.join(roi_dir, "*.nii.gz"))
+    )
+    if not roi_files:
+        raise FileNotFoundError(f"No NIfTI ROIs found in {roi_dir}")
 
-        thresh_mask_path = op.join(data_dir, f'z_desc-mass_level-cluster_corr-FWE_method-montecarlo_thresh_{roi}.nii.gz')
-        nib.save(nii_zmap_thr, thresh_mask_path)
-        print(f"Thresholded ROI for {roi} saved to {thresh_mask_path}", flush=True)
+    print(f"Found {len(roi_files)} ROI file(s) in {roi_dir}", flush=True)
 
-        # Force a binary mask by applying a threshold of 0 and then casting to integer (0 or 1)
-        nii_zmap_bin = threshold_img(nii_zmap_thr, threshold=0)
-        
-        # Ensure the result is binary by converting it to 0 or 1 explicitly
-        binary_data = nii_zmap_bin.get_fdata()
-        binary_data[binary_data > 0] = 1  # Force all non-zero values to 1
-        nii_zmap_bin = nib.Nifti1Image(binary_data, nii_zmap_bin.affine)
-        
-        # Get the image data as a numpy array
-        bin_image_data = nii_zmap_bin.get_fdata()
-        
-        # Print basic information about the data
-        print(f"ROI: {roi}", flush=True)
-        print("Shape:", bin_image_data.shape, flush=True)
-        print("Data type:", bin_image_data.dtype, flush=True)
-        print("Min value:", bin_image_data.min(), flush=True)
-        print("Max value:", bin_image_data.max(), flush=True)
-        print("Mean value:", bin_image_data.mean(), flush=True)
+    voxel_thresh = round(p_to_z(ALE_PVAL, tail="one"), 2)
 
-        # Save the binary mask to the data directory
-        binary_mask_path = op.join(data_dir, f'binary_mask_{roi}.nii.gz')
-        nib.save(nii_zmap_bin, binary_mask_path)
-        print(f"Binary mask for {roi} saved to {binary_mask_path}", flush=True)
+    for roi_path in roi_files:
+        roi_name = op.basename(roi_path)
+        roi_stem = roi_name.replace(".nii.gz", "").replace(".nii", "")
+        print(f"\n=== Processing ROI: {roi_stem} ===", flush=True)
+
+        # Load and (if needed) binarize ROI
+        img = nib.load(roi_path)
+        bin_img = _binarize(img)
+
+        # Optional: save the binary version alongside results for traceability
+        bin_out_dir = op.join(results_dir, "macm", roi_stem)
+        os.makedirs(bin_out_dir, exist_ok=True)
+        bin_mask_path = op.join(bin_out_dir, f"{roi_stem}_binary_mask.nii.gz")
+        nib.save(bin_img, bin_mask_path)
+        print(f"Saved binary mask: {bin_mask_path}", flush=True)
 
         # Select studies for meta-analysis
-        sel_ids = dset.get_studies_by_mask(nii_zmap_bin)
+        sel_ids = dset.get_studies_by_mask(bin_img)
         sel_dset = dset.slice(sel_ids)
         n_foci_db = dset.coordinates.shape[0]
         n_foci_sel = sel_dset.coordinates.shape[0]
         n_exps_db = len(dset.ids)
         n_exps_sel = len(sel_dset.ids)
-        
-        # Make output directory for MACM results
+        print(
+            f"Database: {n_exps_db} exps / {n_foci_db} foci | "
+            f"Selected: {n_exps_sel} exps / {n_foci_sel} foci",
+            flush=True,
+        )
 
-        output_dir = op.join(results_dir, "macm", f"{roi}-2")
-        os.makedirs(output_dir, exist_ok=True)
-
-        results_file = op.join(output_dir, f"{roi}-macm_result.pkl.gz")
+        # Output directory for this ROI
+        output_dir = bin_out_dir
+        results_file = op.join(output_dir, f"{roi_stem}_macm_result.pkl.gz")
 
         if not op.isfile(results_file):
-            print(f"\tRunning MACM for {roi}...", flush=True)
-            #run the MACM
-            ALE_PVAL = 0.01
-            voxel_thresh = round(p_to_z(ALE_PVAL, tail="one"), 2)
+            print(f"\tRunning MACM for {roi_stem}...", flush=True)
             ale_workflow = CBMAWorkflow(
                 estimator=ALE(kernel__sample_size=20),
                 corrector="montecarlo",
@@ -143,25 +153,31 @@ def main(project_dir, n_cores):
             )
             results = ale_workflow.fit(sel_dset)
             results.save(results_file)
-            print(f"\tCompleted MACM for {roi}...", flush=True)
-            
-        # Organize maps and tables in folders
+            print(f"\tCompleted MACM for {roi_stem}.", flush=True)
+
+            # Organize maps and tables in subfolders
             maps_dir = op.join(output_dir, "maps")
             tables_dir = op.join(output_dir, "tables")
             os.makedirs(maps_dir, exist_ok=True)
             os.makedirs(tables_dir, exist_ok=True)
-            maps_files = glob(op.join(output_dir, "*.nii.gz"))
-            tables_files = glob(op.join(output_dir, "*.tsv"))
-            [shutil.move(file_, maps_dir) for file_ in maps_files]
-            [shutil.move(file_, tables_dir) for file_ in tables_files]
+            for f in glob(op.join(output_dir, "*.nii.gz")):
+                if not f.endswith("_macm_result.pkl.gz"):
+                    shutil.move(f, maps_dir)
+            for f in glob(op.join(output_dir, "*.tsv")):
+                shutil.move(f, tables_dir)
         else:
-            print("\tLoading results...", flush=True)
-            results = MetaResult.load(results_fn)
+            print("\tLoading existing results...", flush=True)
+            results = MetaResult.load(results_file)
 
-        # Generate Report
-        if not op.isfile(op.join(output_dir, "report.html")):
-            print("\tGenerating report for ALE analysis...", flush=True)
+        # Report
+        report_path = op.join(output_dir, "report.html")
+        if not op.isfile(report_path):
+            print("\tGenerating report...", flush=True)
             run_reports(results, output_dir)
+            print(f"\tReport saved: {report_path}", flush=True)
+        else:
+            print("\tReport already exists; skipping.", flush=True)
+
 
 def _main(argv=None):
     option = _get_parser().parse_args(argv)

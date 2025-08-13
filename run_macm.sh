@@ -8,8 +8,8 @@
 #SBATCH --qos=pq_nbc
 #SBATCH --partition=IB_44C_512G       # Use IB_44C_512G partition
 # Outputs ----------------------------------
-#SBATCH --output=/home/data/nbc/misc-projects/crooks_macm/code/log/macm/%x_%j.out
-#SBATCH --error=/home/data/nbc/misc-projects/crooks_macm/code/log/macm/%x_%j.err
+#SBATCH --output=/home/data/nbc/misc-projects/crooks_macm/log/macm/%x_%j.out
+#SBATCH --error=/home/data/nbc/misc-projects/crooks_macm/log/macm/%x_%j.err
 # ------------------------------------------
 
 # IB_44C_512G, IB_40C_512G, IB_16C_96G, for running workflow
@@ -26,12 +26,14 @@ source /home/data/nbc/misc-projects/Hampson_Habenula/env/activate_env
 
 set -e
 
-PROJECT_DIR="/home/data/nbc/misc-projects/crooks_macm/"
+PROJECT_DIR="/home/data/nbc/misc-projects/meta-analyses/implicit-learning-macm/"
+ROI_DIR=${PROJECT_DIR}/dset/ROIs
 CODE_DIR=${PROJECT_DIR}/code
 
 # Setup done, run the command
 cmd="python ${CODE_DIR}/macm_workflow.py \
     --project_dir ${PROJECT_DIR} \
+    --roi_dir ${ROI_DIR} \
     --n_cores ${SLURM_CPUS_PER_TASK}"
 echo Commandline: $cmd
 eval $cmd
