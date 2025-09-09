@@ -12,6 +12,8 @@
 
 pwd; hostname; date
 
+# need to run sbatch --array=0-8 run_macm_array.sh # 
+
 # ====== Env ======
 set +u
 module add miniconda3-4.5.11-gcc-8.2.0-oqs2mbg
