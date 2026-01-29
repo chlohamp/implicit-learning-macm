@@ -41,3 +41,45 @@ Centroid coordinates for the 8 volumes included in the analysis are:
 | 11  | 2   | 2   | rGPi      |
 | -12 | 2   | 2   | lGPi      |
 -->
+
+### Analysis
+
+- **macm_workflow_array.py**: The main Python workflow for running ROI-based meta-analytic connectivity modeling (MACM) analyses. It loads a prebuilt NiMARE Dataset, processes either a single ROI or all NIfTI files in a directory, and outputs results (maps, tables, reports) to derivatives/macm/<ROI>/. Both FDR and cluster-FWE corrections are run per ROI. Use this script for batch or automated MACM analyses.
+
+- **run_macm_array.sh**: A SLURM batch script for running MACM analyses on a computing cluster. It sets up the environment and paths, iterates over all ROIs in the dataset, and submits array jobs for parallel MACM processing. Use this script to efficiently run large-scale MACM analyses on HPC systems.
+
+- **extract-macm-studies.ipynb**: An interactive Jupyter notebook for exploring and analyzing the MACM study selection process. It allows you to load all ROI-specific study CSVs, compare intersections of studies across any subset or all ROIs, and output new CSVs for custom ROI combinations. This notebook is ideal for flexible, exploratory analysis and for generating summary tables of study overlap.
+
+
+### Visualizations
+#### Must use:
+
+python 3.8, 3.9, 3.10, and 3.11
+nilearn 0.10.2
+netneurotools 0.2.4
+
+(I personally use Python 3.9.6)
+
+#### To install the necessary packages: 
+
+Install in this order:
+
+1. First install gradec:
+   ```
+   pip install git+https://github.com/JulioAPeraza/gradec.git
+   ```
+
+2. Then install seaborn:
+   ```
+   pip install seaborn
+   ```
+
+3. Install remaining packages:
+   ```
+   pip install numpy pandas matplotlib neuromaps nibabel nilearn==0.10.2 surfplot scipy
+   ```
+
+4. **Important**: Ensure netneurotools is version 0.2.4:
+   ```
+   pip install netneurotools==0.2.4
+   ```
