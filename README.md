@@ -50,6 +50,7 @@ Centroid coordinates for the 8 volumes included in the analysis are:
 
 - **extract-macm-studies.ipynb**: An interactive Jupyter notebook for exploring and analyzing the MACM study selection process. It allows you to load all ROI-specific study CSVs, compare intersections of studies across any subset or all ROIs, and output new CSVs for custom ROI combinations. This notebook is ideal for flexible, exploratory analysis and for generating summary tables of study overlap.
 
+- - **plot_macm.ipynb**: The interactive Jupyter notebook is designed for both visualizing brain activation maps, functional decoding results, and creating summary figures for each ROI. Use this script generate publication-ready images and customize visualizations by creating their own color gradients, enabling flexible exploration and presentation of MACM connectivity patterns.
 
 ### Visualizations
 #### Must use:
